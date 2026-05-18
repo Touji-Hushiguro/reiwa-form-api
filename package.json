@@ -4,8 +4,7 @@
   "private": true,
   "description": "Vercel API for reiwa-career form submissions (replaces GAS Web App)",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "tsc --noEmit"
+    "dev": "vercel dev"
   },
   "dependencies": {
     "@vercel/node": "^3.2.0",
