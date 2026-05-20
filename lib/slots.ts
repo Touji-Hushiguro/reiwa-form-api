@@ -95,13 +95,12 @@ export async function findAllSlotsOfDay(
   const dayStart = jstDate(jstYear, jstMonth, jstDay, config.BUSINESS_START_HOUR, 0);
   const dayEnd = jstDate(jstYear, jstMonth, jstDay, config.BUSINESS_END_HOUR, 0);
 
-  // リードタイム考慮した最早時刻（15分単位に切り上げ）
-  const earliest = new Date(now.getTime() + config.LEAD_TIME_MINUTES * 60 * 1000);
-  earliest.setSeconds(0, 0);
-  const remainder = earliest.getMinutes() % SLOT_MINUTES;
-  if (remainder !== 0) {
-    earliest.setMinutes(earliest.getMinutes() + (SLOT_MINUTES - remainder));
-  }
+  // リードタイム考慮した最早時刻（厳密に15分単位の境界へ切り上げ、ミリ秒含む）
+  // 例: 19:20 → 19:30 / 19:15:00 → 19:15 / 19:15:01 → 19:30
+  const slotMs = SLOT_MINUTES * 60 * 1000;
+  const earliestRaw = now.getTime() + config.LEAD_TIME_MINUTES * 60 * 1000;
+  const earliestMs = Math.ceil(earliestRaw / slotMs) * slotMs;
+  const earliest = new Date(earliestMs);
 
   const scanStart = dayStart.getTime() < earliest.getTime() ? earliest : dayStart;
   if (scanStart.getTime() >= dayEnd.getTime()) return [];

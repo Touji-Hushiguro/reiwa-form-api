@@ -22,7 +22,7 @@ export const CONFIG_V1: VersionConfig = {
 export const CONFIG_V2: VersionConfig = {
   BUSINESS_START_HOUR: 10,
   BUSINESS_END_HOUR: 20,
-  LEAD_TIME_MINUTES: 15,
+  LEAD_TIME_MINUTES: 0,   // リードタイムなし: 現在時刻の次の15分枠から選択可能
   MAX_PER_SLOT: 3,
 };
 
