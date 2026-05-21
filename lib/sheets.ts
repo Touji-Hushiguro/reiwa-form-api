@@ -106,16 +106,19 @@ export async function findRowByPhone(phone: string): Promise<number> {
   return -1;
 }
 
-export async function writeNewRow(data: any): Promise<void> {
+export async function writeNewRow(data: any): Promise<number> {
   const sheets = sheetsClient();
-  // append API: スプシ末尾を自動検出して追記 (列全読不要、高速)
-  await sheets.spreadsheets.values.append({
+  const res = await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A:Q`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [buildRow(data)] },
   });
+  // updatedRange "顧客データDB!A23948:Q23948" から行番号を抽出して返す
+  const updatedRange = res.data.updates?.updatedRange || '';
+  const m = updatedRange.match(/!A(\d+):/);
+  return m ? parseInt(m[1], 10) : -1;
 }
 
 export async function updateRow(rowIndex: number, data: any): Promise<void> {

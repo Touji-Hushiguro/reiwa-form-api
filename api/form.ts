@@ -54,21 +54,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ========== フォーム送信 ==========
     if (action === 'firstSubmit') {
-      await writeNewRow(data);
-      return jsonResponse(res, 200, { success: true });
+      // 新規行追加して行番号を返す → frontend が sessionStorage に保存し、finalSubmit で送り返す
+      const rowIndex = await writeNewRow(data);
+      return jsonResponse(res, 200, { success: true, rowIndex });
     }
 
     if (action === 'finalSubmit') {
-      // 通常は upsert (1顧客1行) 、findRowByPhone が遅い時は append フォールバック
-      // 5秒以内に既存行が見つかれば update、見つからない or タイムアウトなら新規追加
-      const rowIndex = await Promise.race<number>([
-        findRowByPhone(data.phone || ''),
-        new Promise<number>((resolve) => setTimeout(() => resolve(-2), 5000)),
-      ]);
+      // 1. frontend から渡された rowIndex があれば直接 update (理想ケース、最速)
+      // 2. なければ findRowByPhone 5秒タイムアウト付きでフォールバック
+      // 3. それでもダメなら新規追加
+      let rowIndex = parseInt(String(data.rowIndex || 0), 10);
+      if (!(rowIndex > 1)) {
+        rowIndex = await Promise.race<number>([
+          findRowByPhone(data.phone || ''),
+          new Promise<number>((resolve) => setTimeout(() => resolve(-2), 5000)),
+        ]);
+      }
       if (rowIndex > 0) {
         await updateRow(rowIndex, data);
       } else {
-        // rowIndex = -1 (該当なし) or -2 (タイムアウト) → 新規行追加
         await writeNewRow(data);
       }
 
