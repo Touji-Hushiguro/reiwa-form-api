@@ -59,12 +59,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === 'finalSubmit') {
-      // 速度優先: findRowByPhoneをスキップして常に append
-      // 結果として1顧客につき2行 (firstSubmit + finalSubmit) になるが、
-      // Sheets API のスロットリング問題を回避できる
-      await writeNewRow(data);
+      // 通常は upsert (1顧客1行) 、findRowByPhone が遅い時は append フォールバック
+      // 5秒以内に既存行が見つかれば update、見つからない or タイムアウトなら新規追加
+      const rowIndex = await Promise.race<number>([
+        findRowByPhone(data.phone || ''),
+        new Promise<number>((resolve) => setTimeout(() => resolve(-2), 5000)),
+      ]);
+      if (rowIndex > 0) {
+        await updateRow(rowIndex, data);
+      } else {
+        // rowIndex = -1 (該当なし) or -2 (タイムアウト) → 新規行追加
+        await writeNewRow(data);
+      }
 
-      // カレンダー登録とSlack通知は並列実行（直列より速い）
+      // カレンダー登録とSlack通知は並列実行
       const [calResult, slackResult] = await Promise.allSettled([
         createReservationEvent(data),
         notifySlack(data),
