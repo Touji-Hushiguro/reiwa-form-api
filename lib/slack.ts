@@ -18,13 +18,19 @@ export async function notifySlack(data: any): Promise<void> {
     lines.push(`<https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit|スプレッドシート>`);
   }
 
+  // Slack webhook が応答しないと function 全体が止まるので 8秒タイムアウト
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: lines.join('\n') }),
+      signal: controller.signal,
     });
   } catch (err) {
     console.error('Slack通知エラー', err);
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -5,6 +5,17 @@ import { writeNewRow, updateRow, findRowByPhone } from '../lib/sheets';
 import { createReservationEvent } from '../lib/slots';
 import { notifySlack } from '../lib/slack';
 
+// 外部呼び出しが沈黙しないよう明示的にタイムアウトを噛ませる
+// (Vercel function 全体の 60s タイムアウトが先に走ると原因が分からないため)
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race<T>([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout: ${label} (${ms}ms)`)), ms),
+    ),
+  ]);
+}
+
 // フロントからのPOST body を JSON object に変換
 // 対応: application/json, text/plain (sendBeacon), application/x-www-form-urlencoded (旧iframe form)
 async function parseBody(req: VercelRequest): Promise<any> {
@@ -60,35 +71,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === 'finalSubmit') {
+      console.log('[finalSubmit] start', {
+        rowIndex: data.rowIndex,
+        phone: data.phone,
+        hasInterview: !!data.interviewDateTime1,
+        hasInterviewStart: !!data.interviewStart,
+      });
+
       // 1. frontend から渡された rowIndex があれば直接 update (理想ケース、最速)
       // 2. なければ findRowByPhone 5秒タイムアウト付きでフォールバック
       // 3. それでもダメなら新規追加
       let rowIndex = parseInt(String(data.rowIndex || 0), 10);
       if (!(rowIndex > 1)) {
-        rowIndex = await Promise.race<number>([
-          findRowByPhone(data.phone || ''),
-          new Promise<number>((resolve) => setTimeout(() => resolve(-2), 5000)),
-        ]);
-      }
-      if (rowIndex > 0) {
-        await updateRow(rowIndex, data);
-      } else {
-        await writeNewRow(data);
+        console.log('[finalSubmit] no rowIndex, calling findRowByPhone');
+        try {
+          rowIndex = await Promise.race<number>([
+            findRowByPhone(data.phone || ''),
+            new Promise<number>((resolve) => setTimeout(() => resolve(-2), 5000)),
+          ]);
+          console.log('[finalSubmit] findRowByPhone done', { rowIndex });
+        } catch (e: any) {
+          console.error('[finalSubmit] findRowByPhone error', e?.message || e);
+          rowIndex = -2;
+        }
       }
 
-      // カレンダー登録とSlack通知は並列実行
+      if (rowIndex > 0) {
+        console.log('[finalSubmit] calling updateRow', { rowIndex });
+        await withTimeout(updateRow(rowIndex, data), 20000, 'updateRow');
+        console.log('[finalSubmit] updateRow done');
+      } else {
+        console.log('[finalSubmit] calling writeNewRow (fallback)');
+        await withTimeout(writeNewRow(data), 20000, 'writeNewRow');
+        console.log('[finalSubmit] writeNewRow done');
+      }
+
+      // カレンダー登録とSlack通知は並列実行（各々タイムアウト付き）
+      console.log('[finalSubmit] calling cal + slack');
       const [calResult, slackResult] = await Promise.allSettled([
-        createReservationEvent(data),
-        notifySlack(data),
+        withTimeout(createReservationEvent(data), 15000, 'createReservationEvent'),
+        withTimeout(notifySlack(data), 10000, 'notifySlack'),
       ]);
       if (calResult.status === 'rejected') {
-        console.error('カレンダーエラー:', calResult.reason);
+        console.error('カレンダーエラー:', calResult.reason?.message || calResult.reason);
       } else if (!calResult.value?.created) {
         console.warn('カレンダー登録スキップ:', calResult.value?.reason);
       }
       if (slackResult.status === 'rejected') {
-        console.error('Slackエラー:', slackResult.reason);
+        console.error('Slackエラー:', slackResult.reason?.message || slackResult.reason);
       }
+      console.log('[finalSubmit] done');
 
       return jsonResponse(res, 200, { success: true });
     }
