@@ -146,21 +146,26 @@ export async function writeNewRow(data: any): Promise<number> {
   return newRow;
 }
 
+// finalSubmit 時の行更新。A〜Q を丸ごと上書きすると業務GAS の onEdit が
+// 反応中の行に再書き込みする形になり、Sheets API が応答を返さなくなる事象を確認。
+// → 触る必要があるのは面談日時 M〜O だけなので、その範囲だけを update する。
+//   (A〜L, P, Q は firstSubmit ですでに正しく書かれている)
 export async function updateRow(rowIndex: number, data: any): Promise<void> {
   const sheets = sheetsClient();
 
-  // 既存タイムスタンプ/UTM の preserve は値 read が原因不明で固まる事象が確認されたため停止。
-  // finalSubmit 側でタイムスタンプは新規発行し、UTM は frontend から渡された値を信用する。
-  // (firstSubmit の rowIndex passthrough により、同じ顧客の行が更新される前提が成立している)
-  const ts = nowTimestamp();
-
   const t0 = Date.now();
-  console.log('[updateRow] update A' + rowIndex + ':Q' + rowIndex);
+  console.log('[updateRow] update M' + rowIndex + ':O' + rowIndex);
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${rowIndex}:Q${rowIndex}`,
+    range: `${SHEET_NAME}!M${rowIndex}:O${rowIndex}`,
     valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [buildRow(data, ts)] },
+    requestBody: {
+      values: [[
+        data.interviewDateTime1 || '',
+        data.interviewDateTime2 || '',
+        data.interviewDateTime3 || '',
+      ]],
+    },
   });
   console.log('[updateRow] update done (' + (Date.now() - t0) + 'ms)');
 }
