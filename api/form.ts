@@ -59,23 +59,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === 'finalSubmit') {
-      const rowIndex = await findRowByPhone(data.phone || '');
-      if (rowIndex > 0) {
-        await updateRow(rowIndex, data);
-      } else {
-        await writeNewRow(data);
+      // 速度優先: findRowByPhoneをスキップして常に append
+      // 結果として1顧客につき2行 (firstSubmit + finalSubmit) になるが、
+      // Sheets API のスロットリング問題を回避できる
+      await writeNewRow(data);
+
+      // カレンダー登録とSlack通知は並列実行（直列より速い）
+      const [calResult, slackResult] = await Promise.allSettled([
+        createReservationEvent(data),
+        notifySlack(data),
+      ]);
+      if (calResult.status === 'rejected') {
+        console.error('カレンダーエラー:', calResult.reason);
+      } else if (!calResult.value?.created) {
+        console.warn('カレンダー登録スキップ:', calResult.value?.reason);
       }
-      // 後続処理はエラーが出ても全体は成功扱い
-      try {
-        const calResult = await createReservationEvent(data);
-        if (!calResult.created) {
-          console.warn('カレンダー登録スキップ:', calResult.reason);
-        }
-      } catch (calErr) {
-        console.error('カレンダーエラー:', calErr);
+      if (slackResult.status === 'rejected') {
+        console.error('Slackエラー:', slackResult.reason);
       }
-      try { await notifySlack(data); } catch (slackErr) { console.error('Slackエラー:', slackErr); }
-      // 自動返信メールは Phase 後半で実装
+
       return jsonResponse(res, 200, { success: true });
     }
 
