@@ -74,8 +74,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log('[finalSubmit] start', {
         rowIndex: data.rowIndex,
         phone: data.phone,
-        hasInterview: !!data.interviewDateTime1,
-        hasInterviewStart: !!data.interviewStart,
+        interviewDateTime1: data.interviewDateTime1,
+        interviewDateTime2: data.interviewDateTime2,
+        interviewDateTime3: data.interviewDateTime3,
+        interviewStart: data.interviewStart,
+        interviewEnd: data.interviewEnd,
+        version: data.version,
+        userAgent: req.headers['user-agent'],
       });
 
       // 1. frontend から渡された rowIndex があれば直接 update (理想ケース、最速)
