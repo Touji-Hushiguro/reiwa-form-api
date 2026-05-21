@@ -136,13 +136,22 @@ export async function writeNewRow(data: any): Promise<number> {
     }
   }
   const newRow = lastDataRow + 1;
+  const rowToWrite = buildRow(data);
+  console.log('[writeNewRow] target row:', newRow, 'data preview:', {
+    A_timestamp: rowToWrite[0],
+    G_name: rowToWrite[6],
+    J_phone: rowToWrite[9],
+    M_interview1: rowToWrite[12],
+    P_utmSource: rowToWrite[15],
+  });
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A${newRow}:Q${newRow}`,
     valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [buildRow(data)] },
+    requestBody: { values: [rowToWrite] },
   });
+  console.log('[writeNewRow] write complete for row', newRow);
   return newRow;
 }
 
