@@ -75,26 +75,34 @@ async function getAllRows(): Promise<any[][]> {
 }
 
 // 電話番号で既存行を逆順検索
-// スプシが大きくなった (>10000行) ことによる遅さを避けるため、最新500行のみスキャン
+// 注意: gridProperties.rowCount は「割り当て上限」であって「実データ行数」ではない。
+//       (シートに 23920 行確保されてても、実データは 827 行までという状況がある)
+//       なので A列を取得して "値が入ってる最終行" を特定してから、その近辺だけスキャンする。
 export async function findRowByPhone(phone: string): Promise<number> {
   if (!phone) return -1;
   const sheets = sheetsClient();
 
-  // シートの総行数をメタデータ呼び出しで取得（軽量、データ転送なし）
-  const meta = await sheets.spreadsheets.get({
+  // A列(タイムスタンプ)で実データ最終行を特定
+  const aRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    fields: 'sheets(properties(title,gridProperties(rowCount)))',
+    range: `${SHEET_NAME}!A:A`,
   });
-  const sheetMeta = (meta.data.sheets || []).find(
-    (s) => s.properties?.title === SHEET_NAME,
-  );
-  const totalRows = sheetMeta?.properties?.gridProperties?.rowCount || 1000;
+  const aValues = aRes.data.values || [];
+  let lastDataRow = 1;
+  for (let i = aValues.length - 1; i >= 0; i--) {
+    const cell = aValues[i]?.[0];
+    if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+      lastDataRow = i + 1;
+      break;
+    }
+  }
+  if (lastDataRow <= 1) return -1;
 
-  // 最新500行だけ読み込む (firstSubmit→finalSubmitの時間差なら十分カバー)
-  const startRow = Math.max(2, totalRows - 499);
+  // 実データ最終行から遡って最新500行だけ J列をスキャン
+  const startRow = Math.max(2, lastDataRow - 499);
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!J${startRow}:J${totalRows}`,
+    range: `${SHEET_NAME}!J${startRow}:J${lastDataRow}`,
   });
   const values = (res.data.values || []) as string[][];
 
@@ -109,15 +117,24 @@ export async function findRowByPhone(phone: string): Promise<number> {
 export async function writeNewRow(data: any): Promise<number> {
   const sheets = sheetsClient();
 
-  // A列(タイムスタンプ)の実データ最終行を特定 (trailing empties は API が自動除外)
-  // append API だと「書式入りの空行」も「データ扱い」して下に書き込んでしまうので、
-  // values.get で実データ最終行を取得して update で明示的に書き込む
+  // A列(タイムスタンプ)の実データ最終行を特定する
+  // 注意: values.get の "trailing empty 自動除外" は「セルが完全に空」のときのみ。
+  //       過去に "" (空文字列) が代入されてるセルは「データあり」扱いで返ってくる。
+  //       なので末尾から逆向きに走査して、本当に値が入ってる行を探す。
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A:A`,
   });
   const values = res.data.values || [];
-  const lastDataRow = values.length; // 1-indexed (ヘッダ含む)
+
+  let lastDataRow = 1; // ヘッダ行を最低ライン
+  for (let i = values.length - 1; i >= 0; i--) {
+    const cell = values[i]?.[0];
+    if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+      lastDataRow = i + 1; // 1-indexed
+      break;
+    }
+  }
   const newRow = lastDataRow + 1;
 
   await sheets.spreadsheets.values.update({
