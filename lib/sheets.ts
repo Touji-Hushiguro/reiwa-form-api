@@ -93,13 +93,12 @@ export async function findRowByPhone(phone: string): Promise<number> {
 
 export async function writeNewRow(data: any): Promise<void> {
   const sheets = sheetsClient();
-  // A列の長さで次の行を判定
-  const colA = await getAllRows();
-  const nextRow = colA.length + 1;
-  await sheets.spreadsheets.values.update({
+  // append API: スプシ末尾を自動検出して追記 (カラム全読不要 → 高速)
+  await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${nextRow}:Q${nextRow}`,
+    range: `${SHEET_NAME}!A:Q`,
     valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [buildRow(data)] },
   });
 }
