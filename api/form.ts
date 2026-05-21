@@ -5,24 +5,26 @@ import { writeNewRow, updateRow, findRowByPhone } from '../lib/sheets';
 import { createReservationEvent } from '../lib/slots';
 import { notifySlack } from '../lib/slack';
 
-// 既存 GAS との互換: フロントが FormData の "data" フィールドに JSON 文字列を入れて POST してくる
-// 加えて application/json POST も受け付ける
+// フロントからのPOST body を JSON object に変換
+// 対応: application/json, text/plain (sendBeacon), application/x-www-form-urlencoded (旧iframe form)
 async function parseBody(req: VercelRequest): Promise<any> {
-  const contentType = String(req.headers['content-type'] || '').toLowerCase();
-  // Vercel は通常 req.body をパース済みで渡す
-  let body = req.body;
+  let body: any = req.body;
 
+  // Buffer の場合は文字列化
+  if (body && typeof body === 'object' && Buffer.isBuffer(body)) {
+    body = body.toString('utf-8');
+  }
+
+  // 文字列なら JSON parse 試行
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch { /* ignore */ }
   }
 
-  // FormData 風に "data" キーに JSON 文字列が入ってるパターン
+  // FormData 風: "data" キーに JSON 文字列
   if (body && typeof body === 'object' && typeof body.data === 'string') {
     try { return JSON.parse(body.data); } catch { return body; }
   }
 
-  // multipart/form-data の場合、Vercel は自動パースしないので生 body を扱う必要あり
-  // しかし @vercel/node でも multipart は body 文字列として渡されるため、上記のJSONパースで処理
   return body || {};
 }
 
