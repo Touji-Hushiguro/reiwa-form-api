@@ -75,31 +75,45 @@ async function getAllRows(): Promise<any[][]> {
 }
 
 // 電話番号で既存行を逆順検索
+// スプシが大きくなった (>10000行) ことによる遅さを避けるため、最新500行のみスキャン
 export async function findRowByPhone(phone: string): Promise<number> {
   if (!phone) return -1;
   const sheets = sheetsClient();
+
+  // シートの総行数をメタデータ呼び出しで取得（軽量、データ転送なし）
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: 'sheets(properties(title,gridProperties(rowCount)))',
+  });
+  const sheetMeta = (meta.data.sheets || []).find(
+    (s) => s.properties?.title === SHEET_NAME,
+  );
+  const totalRows = sheetMeta?.properties?.gridProperties?.rowCount || 1000;
+
+  // 最新500行だけ読み込む (firstSubmit→finalSubmitの時間差なら十分カバー)
+  const startRow = Math.max(2, totalRows - 499);
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!J:J`, // PHONE column
+    range: `${SHEET_NAME}!J${startRow}:J${totalRows}`,
   });
   const values = (res.data.values || []) as string[][];
+
   const normalized = phone.replace(/-/g, '').trim();
-  for (let i = values.length - 1; i >= 1; i--) {
+  for (let i = values.length - 1; i >= 0; i--) {
     const cell = String(values[i]?.[0] || '').replace(/-/g, '').trim();
-    if (cell === normalized) return i + 1; // 1-indexed row number
+    if (cell === normalized) return startRow + i;
   }
   return -1;
 }
 
 export async function writeNewRow(data: any): Promise<void> {
   const sheets = sheetsClient();
-  // A列の長さで次の行を判定
-  const colA = await getAllRows();
-  const nextRow = colA.length + 1;
-  await sheets.spreadsheets.values.update({
+  // append API: スプシ末尾を自動検出して追記 (列全読不要、高速)
+  await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${nextRow}:Q${nextRow}`,
+    range: `${SHEET_NAME}!A:Q`,
     valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [buildRow(data)] },
   });
 }
