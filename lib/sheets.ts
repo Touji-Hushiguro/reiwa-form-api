@@ -106,38 +106,24 @@ export async function writeNewRow(data: any): Promise<void> {
 
 export async function updateRow(rowIndex: number, data: any): Promise<void> {
   const sheets = sheetsClient();
-  // 既存行を一括取得（A〜Q列）
-  const existingRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${rowIndex}:Q${rowIndex}`,
-  });
-  const existing = (existingRes.data.values?.[0] || []) as string[];
-
   // 既存タイムスタンプ保持
-  const ts = String(existing[0] || '') || nowTimestamp();
+  const tsRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A${rowIndex}`,
+  });
+  const existingTs = String(tsRes.data.values?.[0]?.[0] || '');
+  const ts = existingTs || nowTimestamp();
 
-  // 空フィールドは既存値で補完（firstSubmit と finalSubmit の競合対策）
-  // インデックスは buildRow() の順序に対応
-  const merged: any = { ...data };
-  const preserveIfEmpty = (key: string, idx: number) => {
-    if (!merged[key] && existing[idx]) merged[key] = String(existing[idx]);
-  };
-  preserveIfEmpty('workStart',        1);   // B
-  preserveIfEmpty('jobType',          2);   // C
-  preserveIfEmpty('condition',        3);   // D
-  preserveIfEmpty('education',        4);   // E
-  preserveIfEmpty('employmentStatus', 5);   // F
-  preserveIfEmpty('fullName',         6);   // G
-  preserveIfEmpty('birthDate',        7);   // H
-  preserveIfEmpty('gender',           8);   // I
-  preserveIfEmpty('phone',            9);   // J
-  preserveIfEmpty('email',           10);   // K
-  preserveIfEmpty('prefecture',      11);   // L
-  preserveIfEmpty('interviewDateTime1', 12); // M ★面談日時
-  preserveIfEmpty('interviewDateTime2', 13); // N
-  preserveIfEmpty('interviewDateTime3', 14); // O
-  preserveIfEmpty('utmSource',       15);   // P
-  preserveIfEmpty('utmContent',      16);   // Q
+  // 既存utmを保持（finalSubmitでutmが空のときの保険）
+  const utmRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!P${rowIndex}:Q${rowIndex}`,
+  });
+  const existingUtmSource = String(utmRes.data.values?.[0]?.[0] || '');
+  const existingUtmContent = String(utmRes.data.values?.[0]?.[1] || '');
+  const merged = { ...data };
+  if (!merged.utmSource && existingUtmSource) merged.utmSource = existingUtmSource;
+  if (!merged.utmContent && existingUtmContent) merged.utmContent = existingUtmContent;
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,

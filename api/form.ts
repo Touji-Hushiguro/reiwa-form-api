@@ -54,14 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ========== フォーム送信 ==========
     if (action === 'firstSubmit') {
-      // upsert: 既存行があれば update、なければ新規追加
-      // (finalSubmit と firstSubmit の競合状態を回避するため)
-      const rowIndex = await findRowByPhone(data.phone || '');
-      if (rowIndex > 0) {
-        await updateRow(rowIndex, data);
-      } else {
-        await writeNewRow(data);
-      }
+      await writeNewRow(data);
       return jsonResponse(res, 200, { success: true });
     }
 
