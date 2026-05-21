@@ -108,17 +108,25 @@ export async function findRowByPhone(phone: string): Promise<number> {
 
 export async function writeNewRow(data: any): Promise<number> {
   const sheets = sheetsClient();
-  const res = await sheets.spreadsheets.values.append({
+
+  // A列(タイムスタンプ)の実データ最終行を特定 (trailing empties は API が自動除外)
+  // append API だと「書式入りの空行」も「データ扱い」して下に書き込んでしまうので、
+  // values.get で実データ最終行を取得して update で明示的に書き込む
+  const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:Q`,
+    range: `${SHEET_NAME}!A:A`,
+  });
+  const values = res.data.values || [];
+  const lastDataRow = values.length; // 1-indexed (ヘッダ含む)
+  const newRow = lastDataRow + 1;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A${newRow}:Q${newRow}`,
     valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [buildRow(data)] },
   });
-  // updatedRange "顧客データDB!A23948:Q23948" から行番号を抽出して返す
-  const updatedRange = res.data.updates?.updatedRange || '';
-  const m = updatedRange.match(/!A(\d+):/);
-  return m ? parseInt(m[1], 10) : -1;
+  return newRow;
 }
 
 export async function updateRow(rowIndex: number, data: any): Promise<void> {
