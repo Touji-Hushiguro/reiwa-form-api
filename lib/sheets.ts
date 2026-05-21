@@ -148,29 +148,39 @@ export async function writeNewRow(data: any): Promise<number> {
 
 export async function updateRow(rowIndex: number, data: any): Promise<void> {
   const sheets = sheetsClient();
+  const t0 = Date.now();
+
   // 既存タイムスタンプ保持
+  console.log('[updateRow] step1: get A' + rowIndex);
   const tsRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A${rowIndex}`,
   });
+  console.log('[updateRow] step1 done (' + (Date.now() - t0) + 'ms)');
   const existingTs = String(tsRes.data.values?.[0]?.[0] || '');
   const ts = existingTs || nowTimestamp();
 
   // 既存utmを保持（finalSubmitでutmが空のときの保険）
+  const t1 = Date.now();
+  console.log('[updateRow] step2: get P' + rowIndex + ':Q' + rowIndex);
   const utmRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!P${rowIndex}:Q${rowIndex}`,
   });
+  console.log('[updateRow] step2 done (' + (Date.now() - t1) + 'ms)');
   const existingUtmSource = String(utmRes.data.values?.[0]?.[0] || '');
   const existingUtmContent = String(utmRes.data.values?.[0]?.[1] || '');
   const merged = { ...data };
   if (!merged.utmSource && existingUtmSource) merged.utmSource = existingUtmSource;
   if (!merged.utmContent && existingUtmContent) merged.utmContent = existingUtmContent;
 
+  const t2 = Date.now();
+  console.log('[updateRow] step3: update A' + rowIndex + ':Q' + rowIndex);
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A${rowIndex}:Q${rowIndex}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [buildRow(merged, ts)] },
   });
+  console.log('[updateRow] step3 done (' + (Date.now() - t2) + 'ms)');
 }
