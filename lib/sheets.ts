@@ -248,13 +248,50 @@ export async function writeNewRow(data: any): Promise<number> {
     P_utmSource: rowToWrite[15],
   });
 
+  // 元シートタブの sheetId 取得 (insertDimension 用)
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: 'sheets(properties(sheetId,title))',
+  });
+  const sheetMeta = (meta.data.sheets || []).find(
+    (s) => s.properties?.title === SHEET_NAME,
+  );
+  const sheetId = sheetMeta?.properties?.sheetId;
+  if (sheetId === undefined || sheetId === null) {
+    throw new Error(`元タブ「${SHEET_NAME}」が見つかりません`);
+  }
+
+  // 直前行 (lastDataRow) の直後に 1 行 insertDimension で挿入
+  //   inheritFromBefore: true → 直前行の書式・入力規則・行高さを自動継承
+  //   値は継承されないので R+ 列も空のまま
+  //   グリッドは毎回 +1 行だけ拡大 → 上限超過エラーが原理的に起きない
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    requestBody: {
+      requests: [
+        {
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: 'ROWS',
+              startIndex: lastDataRow,      // 0-indexed: lastDataRow の直後
+              endIndex: lastDataRow + 1,    // exclusive
+            },
+            inheritFromBefore: true,
+          },
+        },
+      ],
+    },
+  });
+
+  // A〜Q (17列) に新規データを書き込み
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A${newRow}:Q${newRow}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [rowToWrite] },
   });
-  console.log('[writeNewRow] write complete for row', newRow);
+  console.log('[writeNewRow] write complete for row', newRow, '(1行 insert, 書式継承)');
 
   // IS チーム転送先にも追記 (失敗しても本体は止めない)
   await transferToIS(data);
