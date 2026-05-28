@@ -166,71 +166,43 @@ export async function transferToIS(data: any): Promise<void> {
     }
     const newRow = lastDataRow + 1;
 
-    // 転送先タブの sheetId と行数・列数を取得 (batchUpdate / clear 用)
+    // 転送先タブの sheetId 取得
     const meta = await sheets.spreadsheets.get({
       spreadsheetId: IS_DEST_SS_ID,
-      fields: 'sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))',
+      fields: 'sheets(properties(sheetId,title))',
     });
     const sheetMeta = (meta.data.sheets || []).find(
       (s) => s.properties?.title === IS_DEST_SHEET_NAME,
     );
     const sheetId = sheetMeta?.properties?.sheetId;
-    const colCount = sheetMeta?.properties?.gridProperties?.columnCount || 26;
-    const rowCount = sheetMeta?.properties?.gridProperties?.rowCount || 1000;
     if (sheetId === undefined || sheetId === null) {
       throw new Error(`転送先タブ「${IS_DEST_SHEET_NAME}」が見つかりません`);
     }
 
-    // グリッド行数が不足してたら行追加 (一気に +500 行のバッファ付与)
-    if (newRow > rowCount) {
-      const addRows = Math.max(500, newRow - rowCount + 100);
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: IS_DEST_SS_ID,
-        requestBody: {
-          requests: [
-            {
-              appendDimension: {
+    // 直前行 (lastDataRow) の直後に 1 行だけ insertDimension で挿入。
+    //   inheritFromBefore: true → 直前行の書式・入力規則・行高さを自動継承
+    //   値は継承されないので R+ 列も空のまま → clear 不要
+    //   グリッドは毎回 +1 行だけ拡大 (バッファ膨張ナシ → 他GASの読み込み速度を維持)
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: IS_DEST_SS_ID,
+      requestBody: {
+        requests: [
+          {
+            insertDimension: {
+              range: {
                 sheetId,
                 dimension: 'ROWS',
-                length: addRows,
+                startIndex: lastDataRow,       // 0-indexed の lastDataRow の直後
+                endIndex: lastDataRow + 1,     // exclusive
               },
+              inheritFromBefore: true,
             },
-          ],
-        },
-      });
-      console.log(`[IS転送] グリッド拡張: ${rowCount} → ${rowCount + addRows} 行 (+${addRows})`);
-    }
+          },
+        ],
+      },
+    });
 
-    // 直前行(lastDataRow) の書式・入力規則を新規行(newRow) にコピー
-    //  - PASTE_NORMAL は値+書式+検証を全部コピー
-    //  - 直後に A〜Q を上書き、R以降をクリアすることで「書式・入力規則のみ継承」と同じ結果を得る
-    if (lastDataRow >= 2) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: IS_DEST_SS_ID,
-        requestBody: {
-          requests: [
-            {
-              copyPaste: {
-                source: {
-                  sheetId,
-                  startRowIndex: lastDataRow - 1, // 0-indexed
-                  endRowIndex: lastDataRow,
-                },
-                destination: {
-                  sheetId,
-                  startRowIndex: newRow - 1,
-                  endRowIndex: newRow,
-                },
-                pasteType: 'PASTE_NORMAL',
-                pasteOrientation: 'NORMAL',
-              },
-            },
-          ],
-        },
-      });
-    }
-
-    // A〜Q (17列) に新規データを書き込み (copyPaste で入った前行の値は上書きされる)
+    // A〜Q (17列) に新規データを書き込み
     await sheets.spreadsheets.values.update({
       spreadsheetId: IS_DEST_SS_ID,
       range: `${IS_DEST_SHEET_NAME}!A${newRow}:Q${newRow}`,
@@ -238,16 +210,7 @@ export async function transferToIS(data: any): Promise<void> {
       requestBody: { values: [buildRow(data)] },
     });
 
-    // R列以降(IS チームの手入力列) の値だけクリア (書式・入力規則は維持)
-    if (colCount > TOTAL_COLS) {
-      const lastColLetter = colNumToLetter(colCount);
-      await sheets.spreadsheets.values.clear({
-        spreadsheetId: IS_DEST_SS_ID,
-        range: `${IS_DEST_SHEET_NAME}!R${newRow}:${lastColLetter}${newRow}`,
-      });
-    }
-
-    console.log(`[IS転送] 電話=${phone} → 行 ${newRow}`);
+    console.log(`[IS転送] 電話=${phone} → 行 ${newRow} (1行 insert, 書式継承)`);
   } catch (e: any) {
     console.error('[IS転送エラー]', e?.message || e);
   }
