@@ -166,18 +166,39 @@ export async function transferToIS(data: any): Promise<void> {
     }
     const newRow = lastDataRow + 1;
 
-    // 転送先タブの sheetId と列数を取得 (batchUpdate / clear 用)
+    // 転送先タブの sheetId と行数・列数を取得 (batchUpdate / clear 用)
     const meta = await sheets.spreadsheets.get({
       spreadsheetId: IS_DEST_SS_ID,
-      fields: 'sheets(properties(sheetId,title,gridProperties(columnCount)))',
+      fields: 'sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))',
     });
     const sheetMeta = (meta.data.sheets || []).find(
       (s) => s.properties?.title === IS_DEST_SHEET_NAME,
     );
     const sheetId = sheetMeta?.properties?.sheetId;
     const colCount = sheetMeta?.properties?.gridProperties?.columnCount || 26;
+    const rowCount = sheetMeta?.properties?.gridProperties?.rowCount || 1000;
     if (sheetId === undefined || sheetId === null) {
       throw new Error(`転送先タブ「${IS_DEST_SHEET_NAME}」が見つかりません`);
+    }
+
+    // グリッド行数が不足してたら行追加 (一気に +500 行のバッファ付与)
+    if (newRow > rowCount) {
+      const addRows = Math.max(500, newRow - rowCount + 100);
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: IS_DEST_SS_ID,
+        requestBody: {
+          requests: [
+            {
+              appendDimension: {
+                sheetId,
+                dimension: 'ROWS',
+                length: addRows,
+              },
+            },
+          ],
+        },
+      });
+      console.log(`[IS転送] グリッド拡張: ${rowCount} → ${rowCount + addRows} 行 (+${addRows})`);
     }
 
     // 直前行(lastDataRow) の書式・入力規則を新規行(newRow) にコピー
