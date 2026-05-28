@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCors, jsonResponse } from '../lib/cors';
 import { sendOtp, verifyOtp } from '../lib/twilio';
-import { writeNewRow, updateRow, findRowByPhone } from '../lib/sheets';
+import { writeNewRow, updateRow, findRowByPhone, backfillISRows } from '../lib/sheets';
 import { createReservationEvent } from '../lib/slots';
 import { notifySlack } from '../lib/slack';
 
@@ -48,6 +48,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const data = await parseBody(req);
     const action = data.action || 'legacy';
+
+    // ========== 管理用: IS 転送先へのバックフィル (一回限り用途) ==========
+    if (action === 'adminBackfillRows') {
+      if (!Array.isArray(data.rows) || data.rows.length === 0) {
+        return jsonResponse(res, 400, { success: false, error: 'rows: number[] required' });
+      }
+      const rowNums = data.rows
+        .map((r: any) => parseInt(String(r), 10))
+        .filter((n: number) => Number.isFinite(n) && n > 1);
+      const result = await backfillISRows(rowNums);
+      return jsonResponse(res, 200, { success: true, result });
+    }
 
     // ========== SMS認証 ==========
     if (action === 'sendOTP') {

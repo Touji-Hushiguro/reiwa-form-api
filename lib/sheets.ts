@@ -140,7 +140,7 @@ export async function findRowByPhone(phone: string): Promise<number> {
 //  - J列(電話番号)が空ならスキップ
 //  - try/catch でラップ、転送失敗しても呼び出し元(本体処理)は止めない
 // ============================================================
-export async function transferToIS(data: any): Promise<void> {
+export async function transferToIS(data: any, originalTimestamp?: string): Promise<void> {
   try {
     const phone = String(data.phone || '').trim();
     if (!phone) {
@@ -202,18 +202,89 @@ export async function transferToIS(data: any): Promise<void> {
       },
     });
 
-    // A〜Q (17列) に新規データを書き込み
+    // A〜Q (17列) に新規データを書き込み (originalTimestamp 指定時は元シートの A 列値を保持)
     await sheets.spreadsheets.values.update({
       spreadsheetId: IS_DEST_SS_ID,
       range: `${IS_DEST_SHEET_NAME}!A${newRow}:Q${newRow}`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [buildRow(data)] },
+      requestBody: { values: [buildRow(data, originalTimestamp)] },
     });
 
     console.log(`[IS転送] 電話=${phone} → 行 ${newRow} (1行 insert, 書式継承)`);
   } catch (e: any) {
     console.error('[IS転送エラー]', e?.message || e);
   }
+}
+
+// ============================================================
+// バックフィル: 元シートの特定行を IS 転送先に追記
+// ============================================================
+// 用途: 転送機能停止中に流入したデータを後から IS 転送先に反映する一回限り操作
+// 動作: 元シートの指定行 (A〜Q) を読んで transferToIS に通す
+//       元シートの A列タイムスタンプを引き継ぐ
+// ============================================================
+export async function backfillISRows(rowNumbers: number[]): Promise<{
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  details: any[];
+}> {
+  const sheets = sheetsClient();
+  const details: any[] = [];
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const rowNum of rowNumbers) {
+    try {
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!A${rowNum}:Q${rowNum}`,
+      });
+      const row = res.data.values?.[0];
+      if (!row || row.length === 0) {
+        failed++;
+        details.push({ row: rowNum, status: 'no data' });
+        continue;
+      }
+
+      const originalTimestamp = String(row[0] || '');
+      const data = {
+        workStart: row[1] || '',
+        jobType: row[2] || '',
+        condition: row[3] || '',
+        education: row[4] || '',
+        employmentStatus: row[5] || '',
+        fullName: row[6] || '',
+        birthDate: row[7] || '',
+        gender: row[8] || '',
+        phone: row[9] || '',
+        email: row[10] || '',
+        prefecture: row[11] || '',
+        interviewDateTime1: row[12] || '',
+        interviewDateTime2: row[13] || '',
+        interviewDateTime3: row[14] || '',
+        utmSource: row[15] || '',
+        utmContent: row[16] || '',
+      };
+
+      console.log(`[backfill] src row ${rowNum}: phone=${data.phone} name=${data.fullName} ts=${originalTimestamp}`);
+      await transferToIS(data, originalTimestamp);
+      succeeded++;
+      details.push({
+        row: rowNum,
+        status: 'transferred',
+        phone: data.phone,
+        name: data.fullName,
+        timestamp: originalTimestamp,
+      });
+    } catch (e: any) {
+      failed++;
+      details.push({ row: rowNum, status: 'error', error: e?.message || String(e) });
+      console.error(`[backfill] エラー src row ${rowNum}:`, e?.message || e);
+    }
+  }
+
+  return { attempted: rowNumbers.length, succeeded, failed, details };
 }
 
 export async function writeNewRow(data: any): Promise<number> {
