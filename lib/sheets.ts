@@ -129,18 +129,64 @@ export async function findRowByPhone(phone: string): Promise<number> {
   return -1;
 }
 
+// IS 転送先シートで電話番号(J列)から既存行を逆順検索する
+// 注意点は findRowByPhone と同じ:
+//   gridProperties.rowCount は割り当て上限なので、A列実データ最終行から
+//   遡って最新500行だけ J列をスキャンする。
+async function findRowByPhoneInIS(phone: string): Promise<number> {
+  if (!phone) return -1;
+  const sheets = sheetsClient();
+
+  const aRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: IS_DEST_SS_ID,
+    range: `${IS_DEST_SHEET_NAME}!A:A`,
+  });
+  const aValues = aRes.data.values || [];
+  let lastDataRow = 1;
+  for (let i = aValues.length - 1; i >= 0; i--) {
+    const cell = aValues[i]?.[0];
+    if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+      lastDataRow = i + 1;
+      break;
+    }
+  }
+  if (lastDataRow <= 1) return -1;
+
+  const startRow = Math.max(2, lastDataRow - 499);
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: IS_DEST_SS_ID,
+    range: `${IS_DEST_SHEET_NAME}!J${startRow}:J${lastDataRow}`,
+  });
+  const values = (res.data.values || []) as string[][];
+
+  const normalized = phone.replace(/-/g, '').trim();
+  for (let i = values.length - 1; i >= 0; i--) {
+    const cell = String(values[i]?.[0] || '').replace(/-/g, '').trim();
+    if (cell === normalized) return startRow + i;
+  }
+  return -1;
+}
+
 // ============================================================
-// IS チーム転送先シートへの append (架電部隊が見るシート)
+// IS チーム転送先シートへの転送 (架電部隊が見るシート)
 // ============================================================
-// 仕様:
-//  - append 専用 (firstSubmit/finalSubmit どちらも末尾に新規行として追記)
-//  - 行位置は記憶せず、毎回 A列スキャンで実データ最終行を再特定
-//  - 直前行の書式・入力規則(プルダウン)を copyPaste で引き継ぐ
-//  - R列以降(IS チームの手入力列)は values.clear で空にする
+// 仕様 (1電話番号 = 1行):
+//  - mode='insert' (firstSubmit 由来 / デフォルト):
+//      - 既存行があればそれを update 扱いに切り替え (重複防止)
+//      - なければ末尾に 1 行 insertDimension で追加し、A〜Q を書き込む
+//  - mode='update' (finalSubmit 由来):
+//      - J列(電話)で既存行を検索し、M〜O だけ上書き
+//      - 見つからなければ防御的に insert にフォールバック
+//  - 直前行の書式・入力規則(プルダウン)は inheritFromBefore で引き継ぐ
 //  - J列(電話番号)が空ならスキップ
 //  - try/catch でラップ、転送失敗しても呼び出し元(本体処理)は止めない
 // ============================================================
-export async function transferToIS(data: any, originalTimestamp?: string): Promise<void> {
+export async function transferToIS(
+  data: any,
+  options: { mode?: 'insert' | 'update'; originalTimestamp?: string } = {},
+): Promise<void> {
+  const mode = options.mode || 'insert';
+  const originalTimestamp = options.originalTimestamp;
   try {
     const phone = String(data.phone || '').trim();
     if (!phone) {
@@ -149,6 +195,60 @@ export async function transferToIS(data: any, originalTimestamp?: string): Promi
     }
 
     const sheets = sheetsClient();
+
+    // ===== update モード: 既存行を探して M〜O だけ書き込み =====
+    if (mode === 'update') {
+      const existingRow = await findRowByPhoneInIS(phone);
+      if (existingRow > 1) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: IS_DEST_SS_ID,
+          range: `${IS_DEST_SHEET_NAME}!M${existingRow}:O${existingRow}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+            values: [[
+              data.interviewDateTime1 || '',
+              data.interviewDateTime2 || '',
+              data.interviewDateTime3 || '',
+            ]],
+          },
+        });
+        console.log(`[IS転送/update] 電話=${phone} → 行 ${existingRow} の M:O 更新`);
+        return;
+      }
+      // 既存行が見つからない場合は防御的に insert へフォールバック
+      console.warn(`[IS転送/update] 電話=${phone} の既存行なし → insert にフォールバック`);
+    }
+
+    // ===== insert モード: 既存行があれば update へ転送 (重複防止) =====
+    if (mode === 'insert') {
+      const existingRow = await findRowByPhoneInIS(phone);
+      if (existingRow > 1) {
+        // 既に行がある = firstSubmit が2回呼ばれた or 同電話が再送信した
+        // 重複行を作らず、面談日時だけ最新値で上書きする
+        const hasInterview =
+          (data.interviewDateTime1 || data.interviewDateTime2 || data.interviewDateTime3);
+        if (hasInterview) {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: IS_DEST_SS_ID,
+            range: `${IS_DEST_SHEET_NAME}!M${existingRow}:O${existingRow}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+              values: [[
+                data.interviewDateTime1 || '',
+                data.interviewDateTime2 || '',
+                data.interviewDateTime3 || '',
+              ]],
+            },
+          });
+          console.log(`[IS転送/insert→merge] 電話=${phone} 既存行 ${existingRow} の M:O 更新 (重複insert回避)`);
+        } else {
+          console.log(`[IS転送/insert→merge] 電話=${phone} 既存行 ${existingRow} あり・面談日時なし → スキップ`);
+        }
+        return;
+      }
+    }
+
+    // ===== 末尾に 1 行 insert =====
 
     // 転送先の A列で実データ最終行を特定
     const aRes = await sheets.spreadsheets.values.get({
@@ -210,7 +310,7 @@ export async function transferToIS(data: any, originalTimestamp?: string): Promi
       requestBody: { values: [buildRow(data, originalTimestamp)] },
     });
 
-    console.log(`[IS転送] 電話=${phone} → 行 ${newRow} (1行 insert, 書式継承)`);
+    console.log(`[IS転送/insert] 電話=${phone} → 行 ${newRow} (1行 insert, 書式継承)`);
   } catch (e: any) {
     console.error('[IS転送エラー]', e?.message || e);
   }
@@ -294,7 +394,8 @@ export async function writeNewRow(data: any): Promise<number> {
   console.log('[writeNewRow] write complete for row', newRow, '(1行 insert, 書式継承)');
 
   // IS チーム転送先にも追記 (失敗しても本体は止めない)
-  await transferToIS(data);
+  // firstSubmit 由来 → insert モード (既存行があれば自動で merge される)
+  await transferToIS(data, { mode: 'insert' });
 
   return newRow;
 }
@@ -322,6 +423,7 @@ export async function updateRow(rowIndex: number, data: any): Promise<void> {
   });
   console.log('[updateRow] update done (' + (Date.now() - t0) + 'ms)');
 
-  // IS チーム転送先にも追記 (失敗しても本体は止めない)
-  await transferToIS(data);
+  // IS チーム転送先にも反映 (失敗しても本体は止めない)
+  // finalSubmit 由来 → update モード: 既存行の M:O だけ上書き (重複行を作らない)
+  await transferToIS(data, { mode: 'update' });
 }
