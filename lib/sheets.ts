@@ -393,9 +393,9 @@ export async function writeNewRow(data: any): Promise<number> {
   });
   console.log('[writeNewRow] write complete for row', newRow, '(1行 insert, 書式継承)');
 
-  // IS チーム転送先にも追記 (失敗しても本体は止めない)
-  // firstSubmit 由来 → insert モード (既存行があれば自動で merge される)
-  await transferToIS(data, { mode: 'insert' });
+  // IS チーム転送先にも追記 (fire-and-forget: 元シート書き込み完了を遅らせない)
+  // transferToIS 内部で try-catch されているので未処理 promise rejection は発生しない
+  void transferToIS(data, { mode: 'insert' });
 
   return newRow;
 }
@@ -423,7 +423,7 @@ export async function updateRow(rowIndex: number, data: any): Promise<void> {
   });
   console.log('[updateRow] update done (' + (Date.now() - t0) + 'ms)');
 
-  // IS チーム転送先にも反映 (失敗しても本体は止めない)
-  // finalSubmit 由来 → update モード: 既存行の M:O だけ上書き (重複行を作らない)
-  await transferToIS(data, { mode: 'update' });
+  // IS チーム転送先にも反映 (fire-and-forget: M:O 更新完了を遅らせない)
+  // transferToIS 内部で try-catch されているので未処理 promise rejection は発生しない
+  void transferToIS(data, { mode: 'update' });
 }

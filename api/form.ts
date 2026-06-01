@@ -103,11 +103,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (rowIndex > 0) {
         console.log('[finalSubmit] calling updateRow', { rowIndex });
-        await withTimeout(updateRow(rowIndex, data), 20000, 'updateRow');
+        await withTimeout(updateRow(rowIndex, data), 30000, 'updateRow');
         console.log('[finalSubmit] updateRow done');
       } else {
         console.log('[finalSubmit] calling writeNewRow (fallback)');
-        await withTimeout(writeNewRow(data), 20000, 'writeNewRow');
+        await withTimeout(writeNewRow(data), 30000, 'writeNewRow');
         console.log('[finalSubmit] writeNewRow done');
       }
 
