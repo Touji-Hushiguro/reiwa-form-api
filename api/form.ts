@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { waitUntil } from '@vercel/functions';
 import { applyCors, jsonResponse } from '../lib/cors';
 import { sendOtp, verifyOtp } from '../lib/twilio';
-import { writeNewRow, updateRow, findRowByPhone } from '../lib/sheets';
+import { writeNewRow, updateRow, findRowByPhone, transferToIS } from '../lib/sheets';
 import { createReservationEvent } from '../lib/slots';
 import { notifySlack } from '../lib/slack';
 
@@ -67,6 +68,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'firstSubmit') {
       // 新規行追加して行番号を返す → frontend が sessionStorage に保存し、finalSubmit で送り返す
       const rowIndex = await writeNewRow(data);
+      // IS 転送は waitUntil で保証付きバックグラウンド実行 (handler return 後も最大60sまで継続)
+      waitUntil(transferToIS(data, { mode: 'insert' }));
       return jsonResponse(res, 200, { success: true, rowIndex });
     }
 
@@ -105,10 +108,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log('[finalSubmit] calling updateRow', { rowIndex });
         await withTimeout(updateRow(rowIndex, data), 30000, 'updateRow');
         console.log('[finalSubmit] updateRow done');
+        // IS 転送 (update モード) を waitUntil で保証付き実行
+        waitUntil(transferToIS(data, { mode: 'update' }));
       } else {
         console.log('[finalSubmit] calling writeNewRow (fallback)');
         await withTimeout(writeNewRow(data), 30000, 'writeNewRow');
         console.log('[finalSubmit] writeNewRow done');
+        // 新規行扱いなので IS 側も insert モード
+        waitUntil(transferToIS(data, { mode: 'insert' }));
       }
 
       // カレンダー登録とSlack通知は並列実行（各々タイムアウト付き）
@@ -134,6 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // 互換: action 指定なし
     await writeNewRow(data);
+    waitUntil(transferToIS(data, { mode: 'insert' }));
     return jsonResponse(res, 200, { success: true });
   } catch (err: any) {
     console.error('form handler error:', err);

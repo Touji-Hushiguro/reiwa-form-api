@@ -393,10 +393,10 @@ export async function writeNewRow(data: any): Promise<number> {
   });
   console.log('[writeNewRow] write complete for row', newRow, '(1行 insert, 書式継承)');
 
-  // IS チーム転送先にも追記 (fire-and-forget: 元シート書き込み完了を遅らせない)
-  // transferToIS 内部で try-catch されているので未処理 promise rejection は発生しない
-  void transferToIS(data, { mode: 'insert' });
-
+  // ⚠ IS 転送はここでは呼ばない。
+  // 呼び出し側 (api/form.ts) が `waitUntil(transferToIS(...))` で明示的に
+  // バックグラウンド実行する設計。fire-and-forget だと Vercel function が
+  // return した瞬間に殺されて IS シートへの書き込みが欠落する事象があった。
   return newRow;
 }
 
@@ -423,7 +423,5 @@ export async function updateRow(rowIndex: number, data: any): Promise<void> {
   });
   console.log('[updateRow] update done (' + (Date.now() - t0) + 'ms)');
 
-  // IS チーム転送先にも反映 (fire-and-forget: M:O 更新完了を遅らせない)
-  // transferToIS 内部で try-catch されているので未処理 promise rejection は発生しない
-  void transferToIS(data, { mode: 'update' });
+  // ⚠ IS 転送はここでは呼ばない。呼び出し側 (api/form.ts) で waitUntil する。
 }
