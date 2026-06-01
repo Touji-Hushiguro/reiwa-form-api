@@ -22,12 +22,18 @@ export async function notifySlack(data: any): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: lines.join('\n') }),
       signal: controller.signal,
     });
+    if (res.ok) {
+      console.log(`[Slack] 送信成功 (status=${res.status}) version=${data.version || 'v1'} phone=${data.phone || '-'}`);
+    } else {
+      const body = await res.text().catch(() => '');
+      console.error(`[Slack] HTTPエラー status=${res.status} body=${body}`);
+    }
   } catch (err) {
     console.error('Slack通知エラー', err);
   } finally {

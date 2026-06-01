@@ -124,6 +124,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       if (slackResult.status === 'rejected') {
         console.error('Slackエラー:', slackResult.reason?.message || slackResult.reason);
+      } else {
+        console.log('[finalSubmit] Slack通知 fulfilled (送信完了)');
       }
       console.log('[finalSubmit] done');
 
