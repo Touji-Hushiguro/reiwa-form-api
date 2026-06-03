@@ -1,12 +1,26 @@
-export async function notifySlack(data: any): Promise<void> {
+// type:
+//   'phone_auth'       = firstSubmit 由来 (電話認証完了、面談日時未確定)
+//   'interview_booked' = finalSubmit 由来 (面談日時確定済み) ← デフォルト
+export async function notifySlack(
+  data: any,
+  options?: { type?: 'phone_auth' | 'interview_booked' },
+): Promise<void> {
   const url = process.env.SLACK_WEBHOOK_URL;
   if (!url) return; // Slack 未設定でも処理続行
 
+  const type = options?.type ?? 'interview_booked';
+
   const lines: string[] = [];
-  lines.push('<@U0ABRUC6JRE> :mega: 新しい応募');
+  if (type === 'phone_auth') {
+    lines.push('<@U0ABRUC6JRE> :iphone: 電話認証完了 (面談日時未確定)');
+  } else {
+    lines.push('<@U0ABRUC6JRE> :mega: 面談予約完了');
+  }
   lines.push('名前: ' + (data.fullName || '未入力'));
   lines.push('電話: ' + (data.phone || '未入力'));
-  lines.push('予約日時: ' + (data.interviewDateTime1 || '未入力'));
+  if (type === 'interview_booked') {
+    lines.push('予約日時: ' + (data.interviewDateTime1 || '未入力'));
+  }
   lines.push('メール: ' + (data.email || '未入力'));
   lines.push('都道府県: ' + (data.prefecture || '未入力'));
   lines.push('転職希望時期: ' + (data.workStart || '未入力'));

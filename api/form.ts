@@ -68,8 +68,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'firstSubmit') {
       // 新規行追加して行番号を返す → frontend が sessionStorage に保存し、finalSubmit で送り返す
       const rowIndex = await writeNewRow(data);
-      // IS 転送は waitUntil で保証付きバックグラウンド実行 (handler return 後も最大60sまで継続)
+      // IS 転送 + 電話認証完了 Slack 通知を waitUntil でバックグラウンド実行
+      // (handler return 後も最大60sまで継続、レスポンス速度に影響しない)
       waitUntil(transferToIS(data, { mode: 'insert' }));
+      waitUntil(notifySlack(data, { type: 'phone_auth' }));
       return jsonResponse(res, 200, { success: true, rowIndex });
     }
 
@@ -122,7 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log('[finalSubmit] calling cal + slack');
       const [calResult, slackResult] = await Promise.allSettled([
         withTimeout(createReservationEvent(data), 15000, 'createReservationEvent'),
-        withTimeout(notifySlack(data), 10000, 'notifySlack'),
+        withTimeout(notifySlack(data, { type: 'interview_booked' }), 10000, 'notifySlack'),
       ]);
       if (calResult.status === 'rejected') {
         console.error('カレンダーエラー:', calResult.reason?.message || calResult.reason);
