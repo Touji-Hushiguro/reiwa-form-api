@@ -12,9 +12,9 @@ export async function notifySlack(
 
   const lines: string[] = [];
   if (type === 'phone_auth') {
-    lines.push('<@U0ABRUC6JRE> :iphone: 電話認証完了 (面談日時未確定)');
+    lines.push('<@U0ABRUC6JRE> <!subteam^S0AV3QW5L48|reiwa-intern> :iphone: 電話認証完了 (面談日時未確定)');
   } else {
-    lines.push('<@U0ABRUC6JRE> :mega: 面談予約完了');
+    lines.push('<@U0ABRUC6JRE> <!subteam^S0AV3QW5L48|reiwa-intern> :mega: 面談予約完了');
   }
   lines.push('名前: ' + (data.fullName || '未入力'));
   lines.push('電話: ' + (data.phone || '未入力'));
