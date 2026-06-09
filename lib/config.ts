@@ -16,7 +16,7 @@ export const CONFIG_V1: VersionConfig = {
   BUSINESS_START_HOUR: 11,
   BUSINESS_END_HOUR: 20,
   LEAD_TIME_MINUTES: 30,
-  MAX_PER_SLOT: 1,
+  MAX_PER_SLOT: 3,
 };
 
 export const CONFIG_V2: VersionConfig = {
