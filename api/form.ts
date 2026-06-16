@@ -5,6 +5,7 @@ import { sendOtp, verifyOtp } from '../lib/twilio';
 import { writeNewRow, updateRow, findRowByPhone, transferToIS } from '../lib/sheets';
 import { createReservationEvent } from '../lib/slots';
 import { notifySlack } from '../lib/slack';
+import { sendLeadEvent } from '../lib/meta-capi';
 
 // 外部呼び出しが沈黙しないよう明示的にタイムアウトを噛ませる
 // (Vercel function 全体の 60s タイムアウトが先に走ると原因が分からないため)
@@ -119,6 +120,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // 新規行扱いなので IS 側も insert モード
         waitUntil(transferToIS(data, { mode: 'insert' }));
       }
+
+      // Meta CAPI: Lead イベントをサーバーサイドから送信（広告ブロッカー・iOS制限をバイパス）
+      const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      waitUntil(
+        sendLeadEvent({
+          phone: data.phone,
+          email: data.email,
+          fullName: data.fullName,
+          clientIpAddress: ip || undefined,
+          clientUserAgent: String(req.headers['user-agent'] || '') || undefined,
+          fbp: data.fbp,
+          fbc: data.fbc,
+          eventSourceUrl: 'https://entry.reiwa-career.com/v4/thanks.html',
+        }).catch((e: any) => console.error('[CAPI] error:', e?.message || e))
+      );
 
       // カレンダー登録とSlack通知は並列実行（各々タイムアウト付き）
       console.log('[finalSubmit] calling cal + slack');
