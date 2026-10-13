@@ -1,4 +1,5 @@
 import { sheetsClient } from './google';
+import { insertRowRequests, normalizePhone } from './sheet-write';
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '';
 const SHEET_NAME = process.env.SHEET_NAME || '顧客データDB';
@@ -80,91 +81,26 @@ export function buildRow(data: any, timestamp?: string): (string | number)[] {
   ];
 }
 
-async function getAllRows(): Promise<any[][]> {
-  const sheets = sheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:A`,
+// 全件検索。直近500行の制限や数値保存で失われた先頭0で既存顧客を見落とさない。
+async function findPhoneRow(spreadsheetId: string, sheetName: string, phone: string): Promise<number> {
+  const key = normalizePhone(phone);
+  if (!key) return -1;
+  const res = await sheetsClient().spreadsheets.values.get({
+    spreadsheetId, range: `'${sheetName.replace(/'/g, "''")}'!J2:J`,
   });
-  return (res.data.values || []) as any[][];
+  const values = res.data.values || [];
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (normalizePhone(values[i]?.[0]) === key) return i + 2;
+  }
+  return -1;
 }
 
-// 電話番号で既存行を逆順検索
-// 注意: gridProperties.rowCount は「割り当て上限」であって「実データ行数」ではない。
-//       (シートに 23920 行確保されてても、実データは 827 行までという状況がある)
-//       なので A列を取得して "値が入ってる最終行" を特定してから、その近辺だけスキャンする。
 export async function findRowByPhone(phone: string): Promise<number> {
-  if (!phone) return -1;
-  const sheets = sheetsClient();
-
-  // A列(タイムスタンプ)で実データ最終行を特定
-  const aRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:A`,
-  });
-  const aValues = aRes.data.values || [];
-  let lastDataRow = 1;
-  for (let i = aValues.length - 1; i >= 0; i--) {
-    const cell = aValues[i]?.[0];
-    if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
-      lastDataRow = i + 1;
-      break;
-    }
-  }
-  if (lastDataRow <= 1) return -1;
-
-  // 実データ最終行から遡って最新500行だけ J列をスキャン
-  const startRow = Math.max(2, lastDataRow - 499);
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!J${startRow}:J${lastDataRow}`,
-  });
-  const values = (res.data.values || []) as string[][];
-
-  const normalized = phone.replace(/-/g, '').trim();
-  for (let i = values.length - 1; i >= 0; i--) {
-    const cell = String(values[i]?.[0] || '').replace(/-/g, '').trim();
-    if (cell === normalized) return startRow + i;
-  }
-  return -1;
+  return findPhoneRow(SPREADSHEET_ID, SHEET_NAME, phone);
 }
 
-// IS 転送先シートで電話番号(J列)から既存行を逆順検索する
-// 注意点は findRowByPhone と同じ:
-//   gridProperties.rowCount は割り当て上限なので、A列実データ最終行から
-//   遡って最新500行だけ J列をスキャンする。
 async function findRowByPhoneInIS(phone: string): Promise<number> {
-  if (!phone) return -1;
-  const sheets = sheetsClient();
-
-  const aRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: IS_DEST_SS_ID,
-    range: `${IS_DEST_SHEET_NAME}!A:A`,
-  });
-  const aValues = aRes.data.values || [];
-  let lastDataRow = 1;
-  for (let i = aValues.length - 1; i >= 0; i--) {
-    const cell = aValues[i]?.[0];
-    if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
-      lastDataRow = i + 1;
-      break;
-    }
-  }
-  if (lastDataRow <= 1) return -1;
-
-  const startRow = Math.max(2, lastDataRow - 499);
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: IS_DEST_SS_ID,
-    range: `${IS_DEST_SHEET_NAME}!J${startRow}:J${lastDataRow}`,
-  });
-  const values = (res.data.values || []) as string[][];
-
-  const normalized = phone.replace(/-/g, '').trim();
-  for (let i = values.length - 1; i >= 0; i--) {
-    const cell = String(values[i]?.[0] || '').replace(/-/g, '').trim();
-    if (cell === normalized) return startRow + i;
-  }
-  return -1;
+  return findPhoneRow(IS_DEST_SS_ID, IS_DEST_SHEET_NAME, phone);
 }
 
 // ============================================================
@@ -279,36 +215,12 @@ export async function transferToIS(
       throw new Error(`転送先タブ「${IS_DEST_SHEET_NAME}」が見つかりません`);
     }
 
-    // 直前行 (lastDataRow) の直後に 1 行だけ insertDimension で挿入。
-    //   inheritFromBefore: true → 直前行の書式・入力規則・行高さを自動継承
-    //   値は継承されないので R+ 列も空のまま → clear 不要
-    //   グリッドは毎回 +1 行だけ拡大 (バッファ膨張ナシ → 他GASの読み込み速度を維持)
+    // 挿入と値の書き込みを同一の原子的バッチにする。
+    // 別API呼び出しだと、同時リクエストが同じ行番号へ上書きして顧客が消える。
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: IS_DEST_SS_ID,
-      requestBody: {
-        requests: [
-          {
-            insertDimension: {
-              range: {
-                sheetId,
-                dimension: 'ROWS',
-                startIndex: lastDataRow,       // 0-indexed の lastDataRow の直後
-                endIndex: lastDataRow + 1,     // exclusive
-              },
-              inheritFromBefore: true,
-            },
-          },
-        ],
-      },
-    });
-
-    // A〜Q (17列) に新規データを書き込み (originalTimestamp 指定時は元シートの A 列値を保持)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: IS_DEST_SS_ID,
-      range: `${IS_DEST_SHEET_NAME}!A${newRow}:Q${newRow}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [buildRow(data, originalTimestamp)] },
-    });
+      requestBody: { requests: insertRowRequests(sheetId, lastDataRow, buildRow(data, originalTimestamp)) },
+    }, { retry: false });
 
     console.log(`[IS転送/insert] 電話=${phone} → 行 ${newRow} (1行 insert, 書式継承)`);
   } catch (e: any) {
@@ -361,36 +273,10 @@ export async function writeNewRow(data: any): Promise<number> {
     throw new Error(`元タブ「${SHEET_NAME}」が見つかりません`);
   }
 
-  // 直前行 (lastDataRow) の直後に 1 行 insertDimension で挿入
-  //   inheritFromBefore: true → 直前行の書式・入力規則・行高さを自動継承
-  //   値は継承されないので R+ 列も空のまま
-  //   グリッドは毎回 +1 行だけ拡大 → 上限超過エラーが原理的に起きない
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: SPREADSHEET_ID,
-    requestBody: {
-      requests: [
-        {
-          insertDimension: {
-            range: {
-              sheetId,
-              dimension: 'ROWS',
-              startIndex: lastDataRow,      // 0-indexed: lastDataRow の直後
-              endIndex: lastDataRow + 1,    // exclusive
-            },
-            inheritFromBefore: true,
-          },
-        },
-      ],
-    },
-  });
-
-  // A〜Q (17列) に新規データを書き込み
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A${newRow}:Q${newRow}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [rowToWrite] },
-  });
+    requestBody: { requests: insertRowRequests(sheetId, lastDataRow, rowToWrite) },
+  }, { retry: false });
   console.log('[writeNewRow] write complete for row', newRow, '(1行 insert, 書式継承)');
 
   // ⚠ IS 転送はここでは呼ばない。
@@ -407,6 +293,15 @@ export async function writeNewRow(data: any): Promise<number> {
 export async function updateRow(rowIndex: number, data: any): Promise<void> {
   const sheets = sheetsClient();
 
+  // firstSubmit後に他の挿入で行番号が変わっている可能性がある。
+  const rowPhone = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID, range: `${SHEET_NAME}!J${rowIndex}`,
+  });
+  if (!normalizePhone(data.phone)) throw new Error('更新対象の電話番号が空です');
+  if (normalizePhone(rowPhone.data.values?.[0]?.[0]) !== normalizePhone(data.phone)) {
+    rowIndex = await findRowByPhone(String(data.phone));
+    if (rowIndex < 2) throw new Error('更新対象が見つかりません。行番号だけで上書きしません');
+  }
   const t0 = Date.now();
   console.log('[updateRow] update M' + rowIndex + ':O' + rowIndex);
   await sheets.spreadsheets.values.update({
